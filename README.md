@@ -35,14 +35,18 @@ Enable the following modules in PHP:
  * WebDAV (mod_dav and mod_dav_fs)
 
 Associate `/stage2.htm` to the PHP handler. (TODO: improve security to allow only `/stage2.htm`).
+```
    <FilesMatch "stage2.htm">
       SetHandler application/x-httpd-php
    </FilesMatch>
+```
 
 Activate WebDav for reports directory. (TODO: improve security to allow only existing directory to be writable).
+```
    <Directory /var/www/html/reports>
       Dav on
       <LimitExcept PUT>
          Require all granted
       </LimitExcept>
    </Directory>
+```   
