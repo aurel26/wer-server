@@ -1,0 +1,120 @@
+<?php
+   //
+   // Variables.
+   //
+   $report_folder = '/var/www/html/reports';
+   $db_file = 'sqlite:' . dirname(__FILE__) . '/db/wer.sqlite';
+   
+   //
+   // Open database.
+   //
+   try
+   {
+      // Be sure, file and directory are writable by web server user.
+      $pdo = new PDO($db_file);
+      $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+      $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); // ERRMODE_WARNING | ERRMODE_EXCEPTION | ERRMODE_SILENT
+   }
+   catch(Exception $e)
+   {
+      echo "Unable to open database." . $e->getMessage();
+      die();
+   }
+
+   //
+   // Generate id_file_report.
+   //
+   $idRandReport = bin2hex(random_bytes(16));
+   $subFolder = substr($idRandReport, 0, 2)  . '/' . substr($idRandReport, 2, 2)  . '/' . $idRandReport;
+   $reportFolder = $report_folder . '/' . $subFolder;
+   
+   //
+   // Insert report into database.
+   //
+   $query = 'INSERT INTO reports (id_file_report, date, remote_ip) VALUES (:id_file_report, datetime(), :remote_ip);';
+   $prep = $pdo->prepare($query);
+   $prep->bindValue(':id_file_report', $idRandReport, PDO::PARAM_STR);
+   $prep->bindValue(':remote_ip', $_SERVER['REMOTE_ADDR'], PDO::PARAM_STR);
+   $prep->execute();
+   $idBucket = $pdo->lastInsertId();
+
+   //
+   // Create directory for report.
+   // Be sure reports folder is writable by web server user.
+   //
+   $result = mkdir($reportFolder, 0755, true);
+   if ($result === false)
+   {
+      die('Unable to create folder.');
+   }
+
+   //
+   // Write XML report to disk.
+   //
+   $postData = fopen("php://input", "r");
+   file_put_contents($reportFolder . '/report.xml', $postData);
+
+   //
+   // Read XML and convert it to PHP object.
+   //
+   $xml = simplexml_load_file($reportFolder . '/report.xml')
+      or die("Unable to parse XML."); 
+
+   //
+   // Update SQL entry with report information.
+   //
+   $query = 'UPDATE reports SET reporttype=:reporttype, eventtype=:eventtype, eventdescription=:eventdescription, friendlyeventname=:friendlyeventname, eventtime=:eventtime, appname=:appname, apppath=:apppath, appcompany=:appcompany, machinename=:machinename, username=:username, files_count=:files_count WHERE id_report=:id_report';
+   $prep = $pdo->prepare($query);
+   
+   $prep->bindValue(':reporttype', $xml->EVENTINFO->attributes()->{'reporttype'}, PDO::PARAM_INT);
+   $prep->bindValue(':eventtype', $xml->EVENTINFO->attributes()->{'eventtype'}, PDO::PARAM_STR);
+   $prep->bindValue(':eventdescription', $xml->EVENTINFO->attributes()->{'eventdescription'}, PDO::PARAM_STR);
+   $prep->bindValue(':friendlyeventname', $xml->EVENTINFO->attributes()->{'friendlyeventname'}, PDO::PARAM_STR);
+   $prep->bindValue(':eventtime', $xml->EVENTINFO->attributes()->{'eventtime'}, PDO::PARAM_INT);
+   
+   $prep->bindValue(':appname', $xml->APPLICATIONINFO->attributes()->{'appname'}, PDO::PARAM_STR);
+   $prep->bindValue(':apppath', $xml->APPLICATIONINFO->attributes()->{'apppath'}, PDO::PARAM_STR);
+   $prep->bindValue(':appcompany', $xml->APPLICATIONINFO->attributes()->{'appcompany'}, PDO::PARAM_STR);
+   
+   $prep->bindValue(':machinename', $xml->MACHINEINFO->attributes()->{'machinename'}, PDO::PARAM_STR);
+   $prep->bindValue(':username', $xml->USERINFO->attributes()->{'username'}, PDO::PARAM_STR);   
+   $prep->bindValue(':files_count', $xml->FILES->count(), PDO::PARAM_INT);
+   
+   $prep->bindValue(':id_report', $idBucket, PDO::PARAM_INT);
+   
+   $prep->execute();
+
+   //
+   // Send response to client.
+   //
+   echo "iData=1\r\n";
+   printf("Bucket=%d\r\n", $idBucket);
+   echo "BucketTable=1\r\n";
+   printf("DumpServer=%s\r\n", $_SERVER['SERVER_ADDR']);
+   printf("DumpFile=/reports/%s/report.cab\r\n", $subFolder);
+
+   //
+   // Add supplemental directives (cf. [MS-CER2]).
+   //
+   // Add sections of the memory address space of the affected process to the error report.
+   //printf("MemoryDump=1\r\n");
+
+   // Collect loaded modules infos (LoadedModules.xml).
+   //printf("ModuleInfo=1\r\n");
+
+   // Include specified files in report.
+   //printf("GetFile=c:\\windows\\regedit.exe\r\n");
+
+   // Collect file version information (FileVer.txt).
+   //printf("GetFileVersion=c:\\windows\\notepad.exe\r\n");
+
+   // Collect the Windows Management Instrumentation (WMI) objects and include them in this error report (wql.txt).
+   //printf("WQL=SELECT * FROM Win32_Account\r\n");
+
+   // Collect Registry keys (registry.txt).
+   //printf("RegKey=HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\r\n");
+
+   // Contents of any currently open documents in the software that generated the
+   // error report are to be added to the error report.
+   //printf("fDoc=1\r\n");
+?>
