@@ -4,13 +4,13 @@
    //
    $report_folder = '/var/www/html/reports';
    $db_file = 'sqlite:' . dirname(__FILE__) . '/db/wer.sqlite';
-   
+
    //
    // Open database.
    //
    try
    {
-      // Be sure, file and directory are writable by web server user.
+      // Be sure database file and the directory are writable by web server user.
       $pdo = new PDO($db_file);
       $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
       $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); // ERRMODE_WARNING | ERRMODE_EXCEPTION | ERRMODE_SILENT
@@ -24,10 +24,11 @@
    //
    // Generate id_file_report.
    //
+   // random_bytes() required PHP 7+. For previous versions, replace 'random_bytes(16)' with 'rand()'.
    $idRandReport = bin2hex(random_bytes(16));
    $subFolder = substr($idRandReport, 0, 2)  . '/' . substr($idRandReport, 2, 2)  . '/' . $idRandReport;
    $reportFolder = $report_folder . '/' . $subFolder;
-   
+
    //
    // Insert report into database.
    //
@@ -39,8 +40,8 @@
    $idBucket = $pdo->lastInsertId();
 
    //
-   // Create directory for report.
-   // Be sure reports folder is writable by web server user.
+   // Create directory for the report.
+   // Be sure 'reports' folder is writable by web server user.
    //
    $result = mkdir($reportFolder, 0755, true);
    if ($result === false)
@@ -55,7 +56,7 @@
    file_put_contents($reportFolder . '/report.xml', $postData);
 
    //
-   // Read XML and convert it to PHP object.
+   // Read XML report and convert it to PHP object.
    //
    $xml = simplexml_load_file($reportFolder . '/report.xml')
       or die("Unable to parse XML."); 
@@ -63,26 +64,68 @@
    //
    // Update SQL entry with report information.
    //
-   $query = 'UPDATE reports SET reporttype=:reporttype, eventtype=:eventtype, eventdescription=:eventdescription, friendlyeventname=:friendlyeventname, eventtime=:eventtime, appname=:appname, apppath=:apppath, appcompany=:appcompany, machinename=:machinename, username=:username, files_count=:files_count WHERE id_report=:id_report';
+   $query = 'UPDATE reports SET
+      [event.reporttype]=:e1, [event.type]=:e2, [event.description]=:e3, [event.friendlyname]=:e4, [event.time]=:e5,
+      [application.name]=:a1, [application.path]=:a2, [application.company]=:a3,
+      [machine.name]=:m1, [machine.os]=:m2,
+      [user.name]=:u1,
+      [files.count]=:files_count
+      WHERE id_report=:id_report';
    $prep = $pdo->prepare($query);
-   
-   $prep->bindValue(':reporttype', $xml->EVENTINFO->attributes()->{'reporttype'}, PDO::PARAM_INT);
-   $prep->bindValue(':eventtype', $xml->EVENTINFO->attributes()->{'eventtype'}, PDO::PARAM_STR);
-   $prep->bindValue(':eventdescription', $xml->EVENTINFO->attributes()->{'eventdescription'}, PDO::PARAM_STR);
-   $prep->bindValue(':friendlyeventname', $xml->EVENTINFO->attributes()->{'friendlyeventname'}, PDO::PARAM_STR);
-   $prep->bindValue(':eventtime', $xml->EVENTINFO->attributes()->{'eventtime'}, PDO::PARAM_INT);
-   
-   $prep->bindValue(':appname', $xml->APPLICATIONINFO->attributes()->{'appname'}, PDO::PARAM_STR);
-   $prep->bindValue(':apppath', $xml->APPLICATIONINFO->attributes()->{'apppath'}, PDO::PARAM_STR);
-   $prep->bindValue(':appcompany', $xml->APPLICATIONINFO->attributes()->{'appcompany'}, PDO::PARAM_STR);
-   
-   $prep->bindValue(':machinename', $xml->MACHINEINFO->attributes()->{'machinename'}, PDO::PARAM_STR);
-   $prep->bindValue(':username', $xml->USERINFO->attributes()->{'username'}, PDO::PARAM_STR);   
+
+   $prep->bindValue(':e1', $xml->EVENTINFO->attributes()->{'reporttype'}, PDO::PARAM_INT);
+   $prep->bindValue(':e2', $xml->EVENTINFO->attributes()->{'eventtype'}, PDO::PARAM_STR);
+   $prep->bindValue(':e3', $xml->EVENTINFO->attributes()->{'eventdescription'}, PDO::PARAM_STR);
+   $prep->bindValue(':e4', $xml->EVENTINFO->attributes()->{'friendlyeventname'}, PDO::PARAM_STR);
+   $prep->bindValue(':e5', $xml->EVENTINFO->attributes()->{'eventtime'}, PDO::PARAM_INT);
+
+   $prep->bindValue(':a1', $xml->APPLICATIONINFO->attributes()->{'appname'}, PDO::PARAM_STR);
+   $prep->bindValue(':a2', $xml->APPLICATIONINFO->attributes()->{'apppath'}, PDO::PARAM_STR);
+   $prep->bindValue(':a3', $xml->APPLICATIONINFO->attributes()->{'appcompany'}, PDO::PARAM_STR);
+
+   $prep->bindValue(':m1', $xml->MACHINEINFO->attributes()->{'machinename'}, PDO::PARAM_STR);
+   $prep->bindValue(':m2', $xml->MACHINEINFO->attributes()->{'os'}, PDO::PARAM_STR);
+
+   $prep->bindValue(':u1', $xml->USERINFO->attributes()->{'username'}, PDO::PARAM_STR);
+
    $prep->bindValue(':files_count', $xml->FILES->count(), PDO::PARAM_INT);
-   
+
    $prep->bindValue(':id_report', $idBucket, PDO::PARAM_INT);
-   
+
    $prep->execute();
+
+   //
+   // Udapte SQL entry with error signature.
+   //
+   $query = 'UPDATE reports SET ';
+
+   $id_count = 0;
+   foreach ($xml->SIGNATURE->PARAMETER as $param)
+   {
+      $id = (int)$param['id'];
+
+      if ($id_count > 0)
+         $query .= ", ";
+      $query .= "[signature.$id.name]=:name$id, [signature.$id.value]=:value$id";
+
+      $id_count++;
+   }
+
+   if ($id_count > 0)
+   {
+      $query .= ' WHERE id_report=:id_report';
+      $prep = $pdo->prepare($query);
+
+      foreach ($xml->SIGNATURE->PARAMETER as $param)
+      {
+         $id = (int)$param['id'];
+         $prep->bindValue(":name$id", $param['name'], PDO::PARAM_STR);
+         $prep->bindValue(":value$id", $param['value'], PDO::PARAM_STR);
+      }
+
+      $prep->bindValue(':id_report', $idBucket, PDO::PARAM_INT);
+      $prep->execute();
+   }
 
    //
    // Send response to client.
@@ -90,6 +133,7 @@
    echo "iData=1\r\n";
    printf("Bucket=%d\r\n", $idBucket);
    echo "BucketTable=1\r\n";
+   // Replace 'SERVER_ADDR' with 'HTTP_HOST' for IIS.
    printf("DumpServer=%s\r\n", $_SERVER['SERVER_ADDR']);
    printf("DumpFile=/reports/%s/report.cab\r\n", $subFolder);
 
@@ -99,10 +143,10 @@
    // Add sections of the memory address space of the affected process to the error report.
    //printf("MemoryDump=1\r\n");
 
-   // Collect loaded modules infos (LoadedModules.xml).
+   // Collect loaded modules info (LoadedModules.xml).
    //printf("ModuleInfo=1\r\n");
 
-   // Include specified files in report.
+   // Include specified files in the report.
    //printf("GetFile=c:\\windows\\regedit.exe\r\n");
 
    // Collect file version information (FileVer.txt).
